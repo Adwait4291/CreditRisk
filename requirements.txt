@@ -1,0 +1,26 @@
+# Core Data Handling and Numerical Operations
+pandas
+numpy
+
+# Machine Learning & Preprocessing
+scikit-learn
+xgboost
+
+# Statistical Tests (VIF, ANOVA, Chi2)
+statsmodels
+scipy
+
+# Plotting & Visualization
+matplotlib
+seaborn
+
+# Artifact Saving/Loading
+joblib
+
+# Web Application Framework
+streamlit
+
+# Note: Specific versions are not pinned here. 
+# After installing these in your virtual environment, 
+# you can run 'pip freeze > requirements.txt' 
+# to lock down the exact versions you used.
