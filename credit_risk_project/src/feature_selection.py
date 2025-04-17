@@ -249,27 +249,3 @@ def perform_feature_selection(df, target_col, potential_num_cols=None, potential
     print(f"\n===== Final Selected Features: {final_features} =====")
 
     return final_features
-
-# --- Example Usage ---
-# Assuming 'df' is your merged and cleaned DataFrame before encoding/scaling
-# Define your target column
-# target_variable = 'Approved_Flag'
-
-# # Manually define if needed, otherwise leave as None to infer
-# numeric_cols_to_consider = None # Or e.g., ['Age_Oldest_TL', 'NETMONTHLYINCOME', ...]
-# categoric_cols_to_consider = None # Or e.g., ['MARITALSTATUS', 'EDUCATION', ...]
-
-# # Run the selection process
-# selected_features = perform_feature_selection(
-#     df,
-#     target_variable,
-#     potential_num_cols=numeric_cols_to_consider,
-#     potential_cat_cols=categoric_cols_to_consider,
-#     vif_threshold=6.0,
-#     p_value_threshold=0.05
-# )
-
-# # Create the final DataFrame for feature engineering
-# df_selected = df[selected_features + [target_variable]].copy()
-# print("\nDataFrame with selected features created.")
-# print(df_selected.head())
