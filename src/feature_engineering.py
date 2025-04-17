@@ -1,136 +1,168 @@
+# -*- coding: utf-8 -*-
+"""
+Feature Engineering Script for Credit Risk Project
+
+Creates a preprocessing pipeline using ColumnTransformer for scaling and encoding.
+"""
+
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 import numpy as np
-import joblib # To save the fitted preprocessor
+import logging
 
-# --- Configuration (Ideally load from a config file/module) ---
-# Based on your script and CREDIT RISK/models/config-py.py [cite: 2]
-EDUCATION_MAP_LIST = ['SSC', '12TH', 'UNDER GRADUATE', 'GRADUATE', 'POST-GRADUATE', 'PROFESSIONAL', 'OTHERS']
-EDUCATION_ORDERED_CATEGORIES = [[1, 2, 3, 3, 4, 3, 1]] # Corresponding numerical order
+# Attempt to import configuration
+try:
+    import config
+    logging.info("Successfully imported config.py")
+except ImportError:
+    logging.critical("config.py not found. Feature engineering cannot proceed without configuration.")
+    raise
 
-COLUMNS_TO_SCALE_DEFAULT = [
-    'Age_Oldest_TL', 'Age_Newest_TL', 'time_since_recent_payment',
-    'max_recent_level_of_deliq', 'recent_level_of_deliq',
-    'time_since_recent_enq', 'NETMONTHLYINCOME', 'Time_With_Curr_Empr'
-]
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Columns identified as nominal categorical (requiring One-Hot Encoding) in your script
-NOMINAL_COLS_DEFAULT = ['MARITALSTATUS', 'GENDER', 'last_prod_enq2', 'first_prod_enq2']
 
-# Column identified as ordinal categorical
-ORDINAL_COLS_DEFAULT = ['EDUCATION']
-
-# --- Feature Engineering Functions ---
-
-def create_feature_engineering_pipeline(numerical_cols, ordinal_cols, nominal_cols, ordinal_mapping_config=None):
+def create_feature_engineering_pipeline(numerical_cols, ordinal_cols, nominal_cols, ordinal_categories):
     """
-    Creates a Scikit-learn pipeline/ColumnTransformer for feature engineering.
+    Creates a Scikit-learn ColumnTransformer for feature engineering.
 
     Args:
-        numerical_cols (list): List of numerical columns to scale.
-        ordinal_cols (list): List of ordinal columns (e.g., ['EDUCATION']).
-        nominal_cols (list): List of nominal columns for one-hot encoding.
-        ordinal_mapping_config (dict, optional): Config for OrdinalEncoder.
-            Example: {'EDUCATION': {'categories': [EDUCATION_MAP_LIST], 'mapping': [EDUCATION_ORDERED_CATEGORIES]}}
-                     If using direct mapping as in original script, this might not be used directly here,
-                     but passed to a separate pre-processing step before the pipeline.
-                     Using OrdinalEncoder is generally preferred within pipelines.
+        numerical_cols (list): List of numerical columns to scale (from config).
+        ordinal_cols (list): List of ordinal columns (e.g., ['EDUCATION']) (from config).
+        nominal_cols (list): List of nominal columns for one-hot encoding (from config).
+        ordinal_categories (list): List of lists containing categories for OrdinalEncoder
+                                   in the desired order (from config). Example: [['Low', 'Medium', 'High']]
 
     Returns:
         ColumnTransformer: The preprocessing object.
     """
-    print("--- Creating Feature Engineering Pipeline ---")
+    logging.info("Creating feature engineering pipeline...")
 
     transformers = []
 
     # Numerical Transformer (Scaling)
     if numerical_cols:
+        # Check if all numerical_cols exist in the dataframe (will be checked during fit)
         numerical_transformer = Pipeline(steps=[
             ('scaler', StandardScaler())
         ])
         transformers.append(('num', numerical_transformer, numerical_cols))
-        print(f"Added StandardScaler for: {numerical_cols}")
+        logging.info(f"Added StandardScaler for: {numerical_cols}")
 
-    # Ordinal Transformer (Manual Mapping or OrdinalEncoder)
-    # Method 1: Using OrdinalEncoder (Recommended for pipelines)
-    if ordinal_cols and ordinal_mapping_config:
-         # Example assumes only 'EDUCATION' for simplicity
-         col_name = ordinal_cols[0] # Adapt if multiple ordinal cols
-         if col_name in ordinal_mapping_config:
-            config = ordinal_mapping_config[col_name]
-            # Check if 'categories' key exists and has the expected structure
-            if 'categories' in config and isinstance(config['categories'], list):
-                 ordinal_transformer = Pipeline(steps=[
-                     ('ordinal', OrdinalEncoder(categories=config['categories'], handle_unknown='use_encoded_value', unknown_value=-1)) # Or np.nan
-                 ])
-                 transformers.append(('ord', ordinal_transformer, ordinal_cols))
-                 print(f"Added OrdinalEncoder for: {ordinal_cols} with categories {config['categories']}")
-            else:
-                 print(f"Warning: Invalid or missing 'categories' in ordinal_mapping_config for {col_name}. Skipping OrdinalEncoder.")
+    # Ordinal Transformer (OrdinalEncoder)
+    if ordinal_cols:
+        if not ordinal_categories or len(ordinal_cols) != len(ordinal_categories):
+             logging.error("Mismatch between ordinal_cols and ordinal_categories in config.")
+             raise ValueError("Ordinal columns and categories configuration mismatch.")
+             
+        ordinal_transformer = Pipeline(steps=[
+            ('ordinal', OrdinalEncoder(categories=ordinal_categories, 
+                                       handle_unknown='use_encoded_value', 
+                                       unknown_value=-1)) # Or np.nan
+        ])
+        transformers.append(('ord', ordinal_transformer, ordinal_cols))
+        logging.info(f"Added OrdinalEncoder for: {ordinal_cols}") # Categories logged during fit
 
     # Nominal Transformer (One-Hot Encoding)
     if nominal_cols:
         categorical_transformer = Pipeline(steps=[
-            # handle_unknown='ignore' -> new categories in test set become all zeros
-            # drop='first' -> helps avoid multicollinearity if needed, but check model compatibility
             ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop=None))
         ])
         transformers.append(('cat', categorical_transformer, nominal_cols))
-        print(f"Added OneHotEncoder for: {nominal_cols}")
+        logging.info(f"Added OneHotEncoder for: {nominal_cols}")
 
 
     # Create the ColumnTransformer
-    # remainder='passthrough' keeps columns not specified
-    # Set remainder='drop' if you only want the processed columns
     preprocessor = ColumnTransformer(
         transformers=transformers,
-        remainder='drop' # Drop columns not explicitly handled (e.g., PROSPECTID)
+        remainder='drop' # Drop columns not explicitly handled
     )
 
-    print("--- Feature Engineering Pipeline Created ---")
+    logging.info("Feature engineering pipeline created successfully.")
     return preprocessor
 
 
 def apply_feature_engineering(df, preprocessor, fit_preprocessor=False):
     """
-    Applies the fitted preprocessing pipeline to the data.
+    Applies the preprocessing pipeline to the data.
 
     Args:
         df (pd.DataFrame): Input DataFrame (should contain selected features).
-        preprocessor (ColumnTransformer): The (fitted) preprocessing object.
+        preprocessor (ColumnTransformer): The preprocessing object (fitted or not).
         fit_preprocessor (bool): If True, fit the preprocessor on this data
                                  (should only be True for training data).
 
     Returns:
         pd.DataFrame: Transformed DataFrame with engineered features.
-        ColumnTransformer: The fitted preprocessor (same object if fit_preprocessor=False).
+        ColumnTransformer: The fitted preprocessor (if fit_preprocessor=True).
     """
-    print(f"\n--- Applying Feature Engineering (Fit = {fit_preprocessor}) ---")
-    if fit_preprocessor:
-        print("Fitting preprocessor...")
-        processed_data = preprocessor.fit_transform(df)
-        print("Preprocessor fitting complete.")
-    else:
-        print("Transforming data using existing preprocessor...")
-        processed_data = preprocessor.transform(df)
-        print("Data transformation complete.")
+    logging.info(f"Applying feature engineering (Fit = {fit_preprocessor})...")
+    
+    original_cols = df.columns.tolist() # Store original columns for checking
+    processed_data = None
+    
+    try:
+        if fit_preprocessor:
+            logging.info("Fitting and transforming data...")
+            processed_data = preprocessor.fit_transform(df)
+            logging.info("Preprocessor fitting and transformation complete.")
+        else:
+            logging.info("Transforming data using existing preprocessor...")
+            processed_data = preprocessor.transform(df)
+            logging.info("Data transformation complete.")
+    except ValueError as e:
+         logging.error(f"ValueError during pipeline application: {e}", exc_info=True)
+         logging.error(f"Original DF columns: {original_cols}")
+         # Log columns expected by the preprocessor if possible (depends on sklearn version and fit status)
+         try:
+             logging.error(f"Preprocessor feature names in: {preprocessor.feature_names_in_}")
+         except AttributeError:
+              logging.error("Could not retrieve feature_names_in_ from preprocessor.")
+         raise # Re-raise the error after logging
+
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during pipeline application: {e}", exc_info=True)
+        raise
 
     # Get feature names after transformation
     try:
-        # Use get_feature_names_out for sklearn >= 1.0
         feature_names = preprocessor.get_feature_names_out()
     except AttributeError:
-         # Fallback for older sklearn versions (might require manual construction)
-         print("Warning: Could not automatically get feature names (likely older scikit-learn). Column names might be generic.")
-         # Manual construction logic would be needed here based on transformers
+         logging.warning("Could not automatically get feature names (likely older scikit-learn). Column names might be generic.")
+         feature_names = [f"feature_{i}" for i in range(processed_data.shape[1])]
+    except Exception as e:
+         logging.error(f"Error getting feature names out: {e}", exc_info=True)
          feature_names = [f"feature_{i}" for i in range(processed_data.shape[1])]
 
 
     final_df = pd.DataFrame(processed_data, columns=feature_names, index=df.index)
-    print("Transformed DataFrame created.")
-    print(f"Shape of transformed data: {final_df.shape}")
+    logging.info(f"Transformed DataFrame created. Shape: {final_df.shape}")
 
+    # Return the preprocessor object (now fitted if fit_preprocessor was True)
     return final_df, preprocessor
+
+# Example usage (optional)
+if __name__ == '__main__':
+    logging.info("Running feature_engineering.py as main script (example).")
+    # This requires a sample DataFrame 'sample_df' and config loaded
+    # Example structure:
+    # import config
+    # sample_data = { ... } # Create sample data matching config columns
+    # sample_df = pd.DataFrame(sample_data)
+    #
+    # pipeline = create_feature_engineering_pipeline(
+    #     numerical_cols=config.COLUMNS_TO_SCALE,
+    #     ordinal_cols=config.ORDINAL_COLUMNS,
+    #     nominal_cols=config.NOMINAL_COLUMNS,
+    #     ordinal_categories=config.EDUCATION_CATEGORIES
+    # )
+    #
+    # processed_df, fitted_pipeline = apply_feature_engineering(sample_df, pipeline, fit_preprocessor=True)
+    # print("Sample Processed DataFrame Head:")
+    # print(processed_df.head())
+    # print("\nFitted Pipeline:")
+    # print(fitted_pipeline)
+    pass # Add actual example if needed
 
