@@ -9,7 +9,7 @@ Orchestrates the entire ML pipeline:
 4. Feature Engineering Pipeline Fitting & Transformation
 5. Saving Artifacts (Pipeline, Encoder, Selected Features)
 6. Model Training
-7. Saving Model
+7. Saving Model (Ensures filename matches Streamlit app expectation)
 8. Model Evaluation & Saving Results
 """
 
@@ -129,7 +129,7 @@ def run_training_pipeline():
         if missing_cols_in_df:
              logging.error(f"Columns selected/target are missing from DataFrame before split: {missing_cols_in_df}")
              return False
-             
+
         df_final_features = df_merged[cols_for_split].copy()
 
         # Check for NaNs in selected features or target before splitting
@@ -156,6 +156,7 @@ def run_training_pipeline():
     try:
         logging.info("--- Step 4: Feature Engineering Pipeline ---")
         # Determine column types *within* the SELECTED features for the pipeline
+        # Use getattr for safety in case attributes are missing in config
         selected_num_cols = [col for col in getattr(config, 'COLUMNS_TO_SCALE', []) if col in final_selected_features]
         selected_ord_cols = [col for col in getattr(config, 'ORDINAL_COLUMNS', []) if col in final_selected_features]
         selected_nom_cols = [col for col in getattr(config, 'NOMINAL_COLUMNS', []) if col in final_selected_features]
@@ -213,58 +214,72 @@ def run_training_pipeline():
 
     # --- 6. Model Training ---
     trained_model = None # Initialize
-    model_name = 'XGBoost_Final' # Define model name for saving/logging
     try:
         logging.info("--- Step 6: Model Training ---")
-        logging.info(f"Starting training for model: {model_name}")
+        logging.info(f"Starting training for model: XGBoost") # Simplified model name logging
         # Set tune_hyperparams=True if you want to run GridSearchCV
         trained_model = model_training.train_xgboost(X_train_processed, y_train, tune_hyperparams=False)
 
         if trained_model is None:
-            logging.error(f"Failed to train {model_name}. Cannot proceed with saving/evaluation.")
+            logging.error(f"Failed to train XGBoost model. Cannot proceed with saving/evaluation.")
             return False # Critical failure if model doesn't train
-        logging.info(f"{model_name} training complete.")
+        logging.info(f"XGBoost training complete.")
     except Exception as e:
         logging.critical(f"Critical error during Model Training: {e}", exc_info=True)
         return False
 
     # --- 7. Save Model ---
+    # <<< MODIFICATION START >>>
     try:
         logging.info("--- Step 7: Saving Trained Model ---")
-        model_path = config.MODEL_FILENAME_TEMPLATE.format(model_name=model_name)
-        saved_model_path = utils.save_artifact(trained_model, model_path)
+        # Define the exact path expected by the Streamlit app
+        # Ensure config.ARTIFACTS_DIR is defined correctly in config.py
+        # (Assuming it points to the 'artifacts' directory relative to project root)
+        if not hasattr(config, 'ARTIFACTS_DIR'):
+             logging.error("Configuration Error: config.py missing ARTIFACTS_DIR definition.")
+             raise AttributeError("config.ARTIFACTS_DIR not defined")
+
+        model_save_path = os.path.join(config.ARTIFACTS_DIR, 'xgboost_model.joblib')
+        logging.info(f"Attempting to save model to: {model_save_path}")
+        saved_model_path = utils.save_artifact(trained_model, model_save_path) # Use the specific path
 
         if not saved_model_path:
-            logging.error(f"Failed to save trained model {model_name}.")
+            logging.error(f"Failed to save trained model to {model_save_path}.")
             success = False # Mark as failed but evaluation might still be possible
         else:
-            logging.info(f"Trained model saved to {saved_model_path}")
+            logging.info(f"Trained model saved successfully to {saved_model_path}")
+    except AttributeError as e:
+         # Catch if ARTIFACTS_DIR was missing
+         logging.error(f"Configuration Error during model saving: {e}")
+         success = False
     except Exception as e:
         logging.error(f"Error during model saving: {e}", exc_info=True)
         success = False
+    # <<< MODIFICATION END >>>
 
 
     # --- 8. Model Evaluation ---
     # Proceed only if model training was successful
+    model_name_for_eval = 'XGBoost_Final' # Use a consistent name for report filenames
     if trained_model is not None and X_test_processed is not None and y_test is not None and label_encoder is not None:
         try:
-            logging.info(f"--- Step 8: Evaluating {model_name} ---")
+            logging.info(f"--- Step 8: Evaluating {model_name_for_eval} ---")
             # Calculate and log metrics
             metrics = model_evaluation.evaluate_model(
-                trained_model, X_test_processed, y_test, model_name, label_encoder
+                trained_model, X_test_processed, y_test, model_name_for_eval, label_encoder
             )
             if metrics:
-                logging.info(f"Evaluation Metrics for {model_name}: {metrics}")
-                metrics_path = os.path.join(config.ARTIFACTS_DIR, f'{model_name}_metrics.json')
+                logging.info(f"Evaluation Metrics for {model_name_for_eval}: {metrics}")
+                metrics_path = os.path.join(config.ARTIFACTS_DIR, f'{model_name_for_eval}_metrics.json')
                 utils.save_artifact(metrics, metrics_path) # Save metrics as JSON
 
             # Generate and log classification report
             report = model_evaluation.generate_classification_report(
-                trained_model, X_test_processed, y_test, label_encoder, model_name
+                trained_model, X_test_processed, y_test, label_encoder, model_name_for_eval
             )
             if report:
-                logging.info(f"Classification Report for {model_name}:\n{report}")
-                report_path = os.path.join(config.ARTIFACTS_DIR, f'{model_name}_report.txt')
+                logging.info(f"Classification Report for {model_name_for_eval}:\n{report}")
+                report_path = os.path.join(config.ARTIFACTS_DIR, f'{model_name_for_eval}_report.txt')
                 try:
                     with open(report_path, 'w') as f: f.write(report)
                     logging.info(f"Classification report saved to {report_path}")
@@ -272,10 +287,10 @@ def run_training_pipeline():
 
             # Generate and save confusion matrix plot
             cm_figure = model_evaluation.plot_confusion_matrix(
-                trained_model, X_test_processed, y_test, label_encoder, model_name
+                trained_model, X_test_processed, y_test, label_encoder, model_name_for_eval
             )
             if cm_figure:
-                plot_path = os.path.join(config.ARTIFACTS_DIR, f'{model_name}_confusion_matrix.png')
+                plot_path = os.path.join(config.ARTIFACTS_DIR, f'{model_name_for_eval}_confusion_matrix.png')
                 try:
                     cm_figure.savefig(plot_path)
                     logging.info(f"Confusion matrix plot saved to {plot_path}")
