@@ -3,8 +3,10 @@ import pandas as pd
 import joblib # To load the trained model and pipeline
 import json   # To load the feature list
 import os     # To construct file paths reliably
-import numpy as np # For data types
-import random # For random sampling
+import io     # To handle bytes IO for uploads/downloads
+import numpy as np # For numeric types and np.nan
+# KNNImputer needed if you revert to app-side imputation, but not if pipeline handles it.
+# from sklearn.impute import KNNImputer
 
 # --- Page Configuration (MUST BE THE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
@@ -16,288 +18,338 @@ st.set_page_config(
 # --- Constants and Configuration ---
 APP_DIR = os.path.dirname(__file__)
 ARTIFACTS_DIR = os.path.join(APP_DIR, 'artifacts')
-DATA_DIR = os.path.join(APP_DIR, 'data') # Assuming data is in a 'data' subdirectory
+DATA_DIR = os.path.join(APP_DIR, 'data')
 
 MODEL_PATH = os.path.join(ARTIFACTS_DIR, 'xgboost_model.joblib')
-FEATURES_PATH = os.path.join(ARTIFACTS_DIR, 'selected_features.json')
-# !!! ASSUMPTION: Assuming pipeline filename. Verify against config.PIPELINE_FILENAME !!!
+# Assumes this pipeline artifact NOW CONTAINS the fitted KNNImputer
 PIPELINE_PATH = os.path.join(ARTIFACTS_DIR, 'preprocessing_pipeline.joblib')
-# !!! ASSUMPTION: Assuming unseen data path. Verify file exists !!!
-UNSEEN_DATA_PATH = os.path.join(DATA_DIR, 'Unseen_Dataset.csv')
+FEATURES_PATH = os.path.join(ARTIFACTS_DIR, 'selected_features.json')
+DESCRIPTIONS_PATH = os.path.join(DATA_DIR, 'Features_Target_Description.csv')
 
+# --- Known Categorical Columns (used for deciding imputation fill value & display) ---
+# Still useful for imputation logic, less critical for display now
+KNOWN_CATEGORICAL_COLS = [
+    'MARITALSTATUS', 'GENDER', 'last_prod_enq2', 'first_prod_enq2', # Nominal
+    'EDUCATION' # Ordinal
+]
 
-# --- Artifact Loading Functions ---
+# --- Artifact Loading Functions (Cached - same as before) ---
 @st.cache_resource
 def load_json_artifact(path, artifact_name):
-    """Loads a JSON artifact (like feature list)."""
     if not os.path.exists(path):
         st.error(f"Error: {artifact_name} file not found at {path}")
-        st.info(f"Please ensure '{os.path.basename(path)}' exists in the '{os.path.dirname(path)}' directory.")
+        st.info(f"Ensure '{os.path.basename(path)}' exists in '{os.path.relpath(os.path.dirname(path), APP_DIR)}'.")
         return None
     try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-        if not data:
-             st.warning(f"Warning: {artifact_name} file loaded from {path} is empty.")
+        with open(path, 'r') as f: data = json.load(f)
+        if not data: st.warning(f"Warning: {artifact_name} file at {path} is empty.")
         return data
-    except json.JSONDecodeError:
-        st.error(f"Error: Could not decode JSON from {path}")
-        return None
-    except Exception as e:
-        st.error(f"An unexpected error occurred loading {artifact_name}: {e}")
-        return None
+    except Exception as e: st.error(f"Error loading {artifact_name}: {e}"); return None
 
 @st.cache_resource
 def load_joblib_artifact(path, artifact_name):
-    """Loads a joblib artifact (model or pipeline)."""
     if not os.path.exists(path):
         st.error(f"Error: {artifact_name} file not found at {path}")
-        st.info(f"Please ensure '{os.path.basename(path)}' was created by main.py and is in the '{os.path.dirname(path)}' directory.")
+        st.info(f"Ensure '{os.path.basename(path)}' exists in '{os.path.relpath(os.path.dirname(path), APP_DIR)}'.")
         return None
     try:
         artifact = joblib.load(path)
         return artifact
-    except Exception as e:
-        st.error(f"An error occurred loading the {artifact_name}: {e}")
-        return None
+    except Exception as e: st.error(f"Error loading {artifact_name}: {e}"); return None
 
-# --- Unseen Data Loading ---
-@st.cache_data # Cache the unseen data
-def load_unseen_data(path):
-    """Loads the unseen dataset."""
-    if not os.path.exists(path):
-        st.error(f"Error: Unseen data file not found at {path}")
-        st.info(f"Please ensure '{os.path.basename(path)}' is in the '{os.path.dirname(path)}' directory.")
-        return None
+@st.cache_data
+def load_feature_descriptions(path):
+    descriptions = {}
+    if not os.path.exists(path): return descriptions
     try:
-        # Try reading as CSV first, handle potential Excel format if needed
-        try:
-            df = pd.read_csv(path)
-        except Exception: # Broad exception for parsing, consider specific ones
-             st.info("Attempting to read unseen data as Excel file...")
-             # Add import openpyxl to your requirements if using excel
-             # import openpyxl
-             df = pd.read_excel(path)
-        return df
-    except Exception as e:
-        st.error(f"An error occurred loading the unseen data: {e}")
-        return None
+        header_row = 0
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+             for i, line in enumerate(f):
+                  if 'Variable Name' in line and 'Description' in line: header_row = i; break
+                  if i > 10: break
+        df_desc = pd.read_csv(path, header=header_row)
+        df_desc.columns = [str(col).strip() for col in df_desc.columns]
+        if 'Variable Name' in df_desc.columns and 'Description' in df_desc.columns:
+             df_desc = df_desc.dropna(subset=['Variable Name'])
+             df_desc = df_desc[df_desc['Variable Name'].astype(str).str.strip() != ',']
+             df_desc['Description'] = df_desc['Description'].fillna('No description available.')
+             descriptions = df_desc.set_index(df_desc['Variable Name'].astype(str).str.strip())['Description'].str.strip().to_dict()
+    except Exception as e: st.error(f"Error loading descriptions: {e}")
+    return descriptions
 
 # --- Load Essential Artifacts ---
-selected_features = load_json_artifact(FEATURES_PATH, "Feature List")
-model = load_joblib_artifact(MODEL_PATH, "Model")
-pipeline = load_joblib_artifact(PIPELINE_PATH, "Preprocessing Pipeline") # Load the pipeline
-df_unseen = load_unseen_data(UNSEEN_DATA_PATH) # Load unseen data
+with st.spinner('Loading artifacts...'):
+    selected_features = load_json_artifact(FEATURES_PATH, "Required Features List")
+    model = load_joblib_artifact(MODEL_PATH, "Prediction Model (XGBoost)")
+    pipeline = load_joblib_artifact(PIPELINE_PATH, "Preprocessing Pipeline")
+    feature_descriptions = load_feature_descriptions(DESCRIPTIONS_PATH)
 
-# Stop the app if essential artifacts or unseen data failed to load
 if selected_features is None or model is None or pipeline is None:
-    st.error("One or more essential artifacts (features, model, pipeline) could not be loaded. App cannot continue.")
+    st.error("Essential artifacts failed to load. Application cannot continue.")
     st.stop()
-# Don't stop if unseen data fails, but disable RANDOM button maybe? Or handle in callback.
 
-# --- Load Descriptions (Placeholder) ---
-# !!! Placeholder: Replace this by parsing Features_Target_Description.csv !!!
-descriptions = {feat: f"Description for {feat}" for feat in selected_features}
+# --- Helper Functions ---
+def validate_csv(uploaded_file):
+    """Checks if the uploaded file is a valid CSV and reads it."""
+    if uploaded_file is None: return None, "Please upload a CSV file."
+    if not uploaded_file.name.lower().endswith('.csv'): return None, "Invalid file type."
+    try:
+        bytes_data = uploaded_file.getvalue()
+        df = pd.read_csv(io.BytesIO(bytes_data))
+        if df.empty: return None, "CSV is empty."
+        # Minimal type conversion here, handle before display
+        return df, None
+    except Exception as e: return None, f"Error reading CSV: {e}"
+
+def check_features(df, required_features):
+    """Checks for missing features and identifies them."""
+    present_features = df.columns.tolist()
+    missing_required = [feat for feat in required_features if feat not in present_features]
+    common_features = [feat for feat in required_features if feat in present_features]
+    return common_features, missing_required
+
+def prepare_data_for_pipeline(df, missing_features):
+    """Adds missing columns, filling numerical with NaN and categorical with 'MISSING'."""
+    df_prepared = df.copy()
+    imputed_cols_info = {}
+    for feature in missing_features:
+        # Use KNOWN_CATEGORICAL_COLS to decide fill value
+        if feature in KNOWN_CATEGORICAL_COLS:
+            fill_value = 'MISSING'
+            fill_type = str
+            imputation_method = "added as 'MISSING'"
+        else: # Assume numerical
+            fill_value = np.nan
+            fill_type = float
+            imputation_method = "added as NaN (for pipeline imputation)"
+        df_prepared[feature] = fill_value
+        try: # Ensure correct type after adding
+            if fill_type == str: df_prepared[feature] = df_prepared[feature].astype(str)
+        except Exception: pass
+        imputed_cols_info[feature] = imputation_method
+    return df_prepared, imputed_cols_info
 
 
-# --- Input Field Keys and Defaults ---
-input_keys = {}
-for feature in selected_features:
-    key = f"input_{''.join(filter(str.isalnum, feature))}"
-    # Basic type inference for default *reset* value
-    is_integer_like = ("TL" in feature or "Pmnt" in feature or "num_" in feature or "Age" in feature or "Flag" in feature or "enq_" in feature or "_enq" in feature or "deliq" in feature or "dpd" in feature)
-    default_value = 0 if is_integer_like else 0.0
-    input_keys[feature] = {"key": key, "default": default_value, "is_int": is_integer_like}
+def convert_df_to_csv(df):
+   """Converts a DataFrame to CSV bytes for downloading."""
+   df_copy = df.copy()
+   # Convert all columns to string before saving to prevent issues
+   for col in df_copy.columns:
+        df_copy[col] = df_copy[col].astype(str)
+   return df_copy.to_csv(index=False).encode('utf-8')
 
 # --- Initialize Session State ---
-for feature, props in input_keys.items():
-    if props["key"] not in st.session_state:
-        st.session_state[props["key"]] = None # Start empty
+if 'uploaded_df' not in st.session_state: st.session_state['uploaded_df'] = None
+if 'validation_error' not in st.session_state: st.session_state['validation_error'] = None
+if 'missing_features_list' not in st.session_state: st.session_state['missing_features_list'] = []
+if 'imputed_cols_info' not in st.session_state: st.session_state['imputed_cols_info'] = {}
+if 'ready_for_pipeline' not in st.session_state: st.session_state['ready_for_pipeline'] = False
+if 'predictions_df' not in st.session_state: st.session_state['predictions_df'] = None
+if 'download_df' not in st.session_state: st.session_state['download_df'] = None
 
-# --- Action Functions ---
-def reset_inputs():
-    """Resets input fields in session state back to None."""
-    for props in input_keys.values():
-         if props["key"] in st.session_state:
-              st.session_state[props["key"]] = None # Reset to show placeholder
+# --- App Title & Main Area ---
+st.markdown("<h1 style='color: #3498db;'>📊 Credit Risk Prediction Application</h1>", unsafe_allow_html=True)
+st.markdown("""
+This application predicts credit risk (P1-P4). Upload a CSV file.
+The prediction pipeline automatically imputes missing numerical features using KNN (fitted on training data). **Results may still be less reliable if many features are missing.**
+""")
 
-def populate_from_random_row():
-    """Populates input fields with values from a random row of the unseen dataset."""
-    if df_unseen is None or df_unseen.empty:
-         st.error("Unseen dataset not loaded or empty. Cannot populate random values.")
-         return
-    if not selected_features:
-         st.error("Feature list not loaded. Cannot populate random values.")
-         return
-
-    st.info("Populating fields with values from a random row...", icon="🎲")
-    random_row = df_unseen.sample(1).iloc[0]
-
-    for feature, props in input_keys.items():
-        key = props["key"]
-        if feature not in random_row.index:
-             st.warning(f"Feature '{feature}' not found in the unseen dataset. Resetting field.", icon="⚠️")
-             st.session_state[key] = None # Reset if column missing
-             continue
-
-        value = random_row[feature]
-
-        # Handle NaN values from the dataset row
-        if pd.isna(value):
-             value_to_set = props["default"] # Use the 0 or 0.0 default on NaN
-             st.warning(f"NaN found for '{feature}' in random row. Using default value: {value_to_set}", icon="⚠️")
-        else:
-             # Attempt to convert to appropriate numeric type for number_input
-             try:
-                  value_to_set = int(value) if props["is_int"] else float(value)
-             except (ValueError, TypeError):
-                  st.warning(f"Could not convert value '{value}' for '{feature}' to a number. Using default value: {props['default']}", icon="⚠️")
-                  value_to_set = props["default"] # Use default if conversion fails
-
-        # Update session state, which triggers UI update
-        st.session_state[key] = value_to_set
-
-
-# --- App Title & UI ---
-st.markdown("<h1 style='color: #3498db;'>📊 Credit Risk Prediction by Machine Learning</h1>", unsafe_allow_html=True)
-st.markdown("Enter the applicant parameters below or use the RANDOM button to populate fields from the unseen dataset.")
-st.divider()
-
-# --- Input Fields ---
-st.subheader("📈 Applicant Parameters Input")
-st.caption(f"Please provide values for the following {len(selected_features)} parameters:")
-
-num_columns = 3
-cols = st.columns(num_columns)
-features_per_column = (len(selected_features) + num_columns - 1) // num_columns
-
-for i, feature in enumerate(selected_features):
-    col_index = i // features_per_column
-    if col_index < num_columns:
-        description = descriptions.get(feature, f"Description for {feature}") # Placeholder
-        props = input_keys[feature]
-        key = props["key"]
-
-        with cols[col_index]:
-            # Using number_input for all based on user's last provided code
-            default_value = props["default"]
-            format_str = "%.0f" if props["is_int"] else "%.2f"
-            step = 1.0 if props["is_int"] else 0.01
-            st.number_input(
-                feature,
-                step=step,
-                format=format_str,
-                key=key,
-                help=description,
-                value=st.session_state[key], # Bind value
-                placeholder="Enter value..."
-            )
-st.write("")
-
-# --- Action Buttons ---
-button_col1, button_col2, button_col3 = st.columns([1, 1, 4]) # Ratios for Reset, Random, Predict
-
-with button_col1:
-    st.button("🔄 Reset", on_click=reset_inputs, help="Click to clear input fields")
-
-with button_col2:
-    # Disable RANDOM button if unseen data failed to load
-    random_disabled = (df_unseen is None or df_unseen.empty)
-    st.button("🎲 Random Row", on_click=populate_from_random_row, help="Click to fill fields with data from a random row of the unseen dataset", disabled=random_disabled)
-
-with button_col3:
-    predict_button = st.button("✨ Predict using ML", type="primary", use_container_width=True)
+# --- Moved Required Features List Here ---
+with st.expander("View Required Features for Optimal Prediction"):
+    if selected_features:
+        col1, col2 = st.columns(2)
+        features_list = sorted(selected_features); midpoint = (len(features_list) + 1) // 2
+        with col1:
+             for feature in features_list[:midpoint]: feature_str = str(feature); description = feature_descriptions.get(feature_str, ""); st.markdown(f"**`{feature_str}`**"); st.caption(f"{description}")
+        with col2:
+             for feature in features_list[midpoint:]: feature_str = str(feature); description = feature_descriptions.get(feature_str, ""); st.markdown(f"**`{feature_str}`**"); st.caption(f"{description}")
+    else: st.warning("Could not load the list of required features.")
 
 st.divider()
 
-# --- Prediction Output Area ---
-st.subheader("💡 Prediction Result")
-result_placeholder = st.container()
+# --- Callback function to reset state on new upload ---
+def handle_new_upload():
+    """Resets state variables."""
+    st.session_state['uploaded_df'] = None
+    st.session_state['validation_error'] = None
+    st.session_state['missing_features_list'] = []
+    st.session_state['imputed_cols_info'] = {}
+    st.session_state['ready_for_pipeline'] = False
+    st.session_state['predictions_df'] = None
+    st.session_state['download_df'] = None
 
-# --- Prediction Logic ---
-if predict_button:
-    input_data_dict = {}
-    all_inputs_valid = True
-    missing_or_invalid_fields = []
+# == Section 1: File Upload ==
+st.header("1. Upload Applicant Data")
+uploaded_file = st.file_uploader("Choose a CSV file", type="csv", help="Pipeline imputes missing numerical features with KNN.", key="file_uploader_key", on_change=handle_new_upload, accept_multiple_files=False)
 
-    # 1. Collect inputs from session state
-    for feature, props in input_keys.items():
-        key_to_check = props["key"]
-        value = st.session_state.get(key_to_check)
+# == Section 2: Validation and Data Preparation ==
+st.header("2. Data Validation & Preparation")
+current_file_in_uploader = st.session_state.get('file_uploader_key')
 
-        if value is None: # Check if field is empty
-             all_inputs_valid = False
-             missing_or_invalid_fields.append(feature)
-             # Use default value (0 or 0.0) if missing, for pipeline input
-             input_data_dict[feature] = props["default"]
+if current_file_in_uploader is not None and st.session_state.get('uploaded_df') is None:
+    with st.spinner("Validating and preparing data..."):
+        df, error = validate_csv(current_file_in_uploader)
+        if error:
+            st.error(f"File Validation Error: {error}", icon="🚫")
+            st.session_state['validation_error'] = error
+            st.session_state['ready_for_pipeline'] = False
         else:
-             # Value should already be a number due to st.number_input
-             input_data_dict[feature] = value
+            st.success("CSV file format is valid.", icon="✅")
+            st.session_state['uploaded_df'] = df
+            st.session_state['validation_error'] = None
+            common_features, missing_required = check_features(df, selected_features)
+            st.session_state['missing_features_list'] = missing_required
+            if not missing_required:
+                st.success("All required features are present.", icon="✅")
+                try:
+                    df_prepared = df[selected_features].copy()
+                    st.session_state['ready_for_pipeline'] = True
+                    st.session_state['imputed_cols_info'] = {}
+                except KeyError as e:
+                     st.error(f"Error selecting required features: {e}.", icon="🚫")
+                     st.session_state['ready_for_pipeline'] = False; st.session_state['validation_error'] = "Error preparing data."
+            else:
+                st.warning(f"Missing required features found!", icon="⚠️")
+                st.info("Preparing data by adding missing columns (Numerical->NaN, Categorical->'MISSING') for pipeline imputation.", icon="⏳")
+                df_prepared, imputed_info = prepare_data_for_pipeline(df, missing_required)
+                st.session_state['imputed_cols_info'] = imputed_info
+                try:
+                    df_processed = df_prepared[selected_features].copy()
+                    st.session_state['ready_for_pipeline'] = True
+                    st.success("Data prepared for pipeline (missing features handled).", icon="✅")
+                except KeyError as e:
+                     st.error(f"Error reordering columns after preparation: {e}.", icon="🚫")
+                     st.session_state['ready_for_pipeline'] = False; st.session_state['validation_error'] = "Error preparing data."
 
-    # 2. Stop if inputs invalid (still None after trying to collect)
-    if not all_inputs_valid:
-         st.error(f"Please ensure all fields have valid numeric values. Missing input for: {', '.join(missing_or_invalid_fields)}.")
-         st.stop()
+# --- Display Missing/Imputed Feature Information ---
+if st.session_state.get('missing_features_list'):
+    with st.expander("View Missing Features"):
+        st.write("The following required features were missing from the uploaded file:")
+        st.json(st.session_state['missing_features_list'])
+if st.session_state.get('imputed_cols_info'):
+     with st.expander("View Imputation Details"):
+        st.write("Missing features were prepared for the pipeline as follows:")
+        st.json(st.session_state['imputed_cols_info'])
 
-    # 3. Create DataFrame
+# Display preview and stats (using original uploaded data)
+if st.session_state.get('uploaded_df') is not None:
+    st.subheader("Uploaded Data Preview (First 5 Rows)")
     try:
-        input_df = pd.DataFrame([input_data_dict])
-        # Ensure correct column order BEFORE passing to pipeline
-        input_df = input_df[selected_features]
-        # Ensure correct data types (optional, pipeline might handle)
-        # for feature, props in input_keys.items():
-        #     if props['is_int']:
-        #         input_df[feature] = pd.to_numeric(input_df[feature], errors='coerce').astype('Int64') # Allow Pandas nullable int
-        #     else:
-        #         input_df[feature] = pd.to_numeric(input_df[feature], errors='coerce').astype(float)
-
+        # **UPDATED: Convert ALL columns to string for display to fix PyArrow issues**
+        df_preview = st.session_state['uploaded_df'].head().copy()
+        for col in df_preview.columns:
+            df_preview[col] = df_preview[col].astype(str)
+        st.dataframe(df_preview, use_container_width=True)
     except Exception as e:
-        st.error(f"Error creating input DataFrame: {e}")
-        st.stop()
+        st.error(f"Error displaying data preview: {e}. Check CSV data types.", icon="🚫")
 
-    # 4. Apply the PREPROCESSING PIPELINE
-    try:
-        input_df_processed = pipeline.transform(input_df)
-    except ValueError as e:
-         st.error(f"Error applying preprocessing pipeline: {e}")
-         st.info("This often happens if input data has unexpected types or values (e.g., text where number expected by pipeline). Check pipeline steps.")
-         st.stop()
-    except Exception as e:
-        st.error(f"Unexpected error applying preprocessing pipeline: {e}")
-        st.exception(e)
-        st.stop()
+    with st.expander("Show Descriptive Statistics"):
+         try:
+             # **UPDATED: Convert stats dataframes to string after calculation**
+             df_original_for_stats = st.session_state['uploaded_df']
+             st.write("Numerical Features:")
+             num_stats = df_original_for_stats.describe(include=np.number)
+             st.dataframe(num_stats.astype(str), use_container_width=True)
+             
+             st.write("Categorical/Object Features:")
+             cat_stats = df_original_for_stats.describe(include=['object', 'category'])
+             st.dataframe(cat_stats.astype(str), use_container_width=True)
+             
+             if st.session_state.get('missing_features_list'):
+                  st.caption(f"Note: Stats on original data. Missing columns handled by pipeline: `{', '.join(st.session_state['missing_features_list'])}`")
+         except Exception as e:
+             st.warning(f"Could not generate descriptive statistics: {e}")
 
-    # 5. Make Prediction
-    try:
-        predicted_class_index = model.predict(input_df_processed)[0]
-        predicted_proba_all = model.predict_proba(input_df_processed)[0]
-        predicted_proba = predicted_proba_all[predicted_class_index]
+elif st.session_state.get('validation_error'):
+     st.error(f"File Validation Error: {st.session_state['validation_error']}", icon="🚫")
+else:
+    st.info("Upload a CSV file to begin.")
 
-        risk_map = {0: 'P1 (Very Low Risk)', 1: 'P2 (Low Risk)', 2: 'P3 (Medium Risk)', 3: 'P4 (High Risk)'}
-        prediction_label = risk_map.get(predicted_class_index, f"Unknown Class ({predicted_class_index})")
+# == Section 3: Prediction ==
+st.header("3. Run Prediction")
+run_button_disabled = not st.session_state.get('ready_for_pipeline') # Check flag
+run_prediction = st.button("🚀 Run Prediction", disabled=run_button_disabled, type="primary", help="Predict risk levels for the prepared data.")
 
-        result_html = f"""
-        <div style="text-align: center; font-size: x-large; padding: 10px; background-color: #e6ffef; border-radius: 5px; border: 1px solid #34A853;">
-             <b>Predicted Risk Level:</b> <span style="color: #34A853; font-weight: bold;">{prediction_label}</span><br>
-             (Confidence: {predicted_proba:.2%})
-        </div>
-        """
-        result_placeholder.markdown(result_html, unsafe_allow_html=True)
+# == Section 4: Results ==
+st.header("4. Prediction Results")
+results_placeholder = st.container()
 
-    except Exception as e:
-        st.error(f"An unexpected error occurred during prediction: {e}")
-        st.exception(e)
+if run_prediction and not run_button_disabled:
+    if st.session_state.get('uploaded_df') is not None:
+        df_original = st.session_state['uploaded_df']
+        missing_features = st.session_state['missing_features_list']
+        df_prepared_for_run, _ = prepare_data_for_pipeline(df_original, missing_features)
+        try:
+             input_df_for_pipeline = df_prepared_for_run[selected_features] # Ensure order
+        except KeyError:
+             results_placeholder.error("Error preparing data just before prediction. Columns mismatch.", icon="🚫")
+             st.stop()
 
-# --- Input Summary Expander ---
-if selected_features:
-    with st.expander("View Input Summary"):
-        summary_data_list = []
-        for feature, props in input_keys.items():
-            key_to_check = props["key"]
-            value = st.session_state.get(key_to_check)
-            display_value = props["default"] if value is None else value
+        with st.spinner('Running prediction pipeline (includes imputation, scaling, encoding)...'):
+            results_placeholder.empty() # Clear previous results
+            try:
+                # Apply the FULL pipeline
+                input_df_transformed = pipeline.transform(input_df_for_pipeline)
+                predictions_raw = model.predict(input_df_transformed)
+                predictions_proba = model.predict_proba(input_df_transformed)
 
-            summary_data_list.append({"Parameter": feature, "Entered Value": display_value})
-        summary_df = pd.DataFrame(summary_data_list)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                # Create results DataFrame
+                results_df_display = pd.DataFrame(index=st.session_state['uploaded_df'].index)
+                risk_map = {0: 'P1', 1: 'P2', 2: 'P3', 3: 'P4'}
+                # Ensure results columns are explicitly string for display
+                results_df_display['Predicted_Risk_Level'] = [risk_map.get(p, f"Unknown ({p})") for p in predictions_raw]
+                results_df_display['Prediction_Confidence'] = [f"{prob[pred_idx]:.2%}" for pred_idx, prob in zip(predictions_raw, predictions_proba)]
+                results_df_display['Imputation_Status'] = 'Pipeline Imputed Missing Features' if missing_features else 'Complete Data'
+                # **UPDATED: Ensure ALL columns are converted to string**
+                results_df_display = results_df_display.astype(str)
 
+                st.session_state['predictions_df'] = results_df_display
+
+                # Create download df (keep original types where possible before converting for CSV)
+                download_df = st.session_state['uploaded_df'].copy()
+                # Add results columns from display df
+                download_df = download_df.join(results_df_display[['Predicted_Risk_Level', 'Prediction_Confidence', 'Imputation_Status']])
+                st.session_state['download_df'] = download_df
+
+                # --- Display results ---
+                results_placeholder.success("Predictions generated successfully!", icon="✅")
+                if missing_features:
+                     imputed_cols_str = ", ".join([f"`{k}` ({v})" for k, v in st.session_state.get('imputed_cols_info', {}).items()])
+                     results_placeholder.warning(f"**Warning:** Pipeline imputed missing features ({imputed_cols_str}). Results may be less reliable.", icon="⚠️")
+                # Display the string-converted results dataframe
+                results_placeholder.dataframe(results_df_display, use_container_width=True, height=300)
+
+                csv_results = convert_df_to_csv(download_df) # Updated convert function handles string conversion
+                results_placeholder.download_button(label="⬇️ Download Full Results (CSV)", data=csv_results, file_name="credit_risk_predictions_pipeline_imputed.csv", mime="text/csv", key='download_csv', help="Download data with predictions.")
+                # --- End display ---
+
+            except Exception as e: # Catch broader exceptions
+                st.session_state['predictions_df'] = None; st.session_state['download_df'] = None
+                results_placeholder.error(f"Error during prediction pipeline: {e}", icon="🚫")
+                results_placeholder.info("This could be due to unexpected data values even after preparation (e.g., strings in a numerical column expected by the pipeline's imputer/scaler) or issues within the saved pipeline/model.")
+                st.exception(e)
+    else:
+         results_placeholder.error("Error: Original uploaded data missing. Please re-upload.", icon="🚫")
+
+# Display previous results if they exist
+elif st.session_state.get('predictions_df') is not None:
+    results_df_display = st.session_state['predictions_df'] # Already string type
+    download_df = st.session_state.get('download_df')
+    if st.session_state.get('missing_features_list'):
+         imputed_cols_str = ", ".join([f"`{k}` ({v})" for k, v in st.session_state.get('imputed_cols_info', {}).items()])
+         results_placeholder.warning(f"**Warning:** Pipeline imputed missing features ({imputed_cols_str}). Results may be less reliable.", icon="⚠️")
+
+    results_placeholder.dataframe(results_df_display, use_container_width=True, height=300) # Display string version
+
+    if download_df is not None:
+        csv_results = convert_df_to_csv(download_df) # Updated convert function handles string conversion
+        results_placeholder.download_button(label="⬇️ Download Full Results (CSV)", data=csv_results, file_name="credit_risk_predictions_pipeline_imputed.csv", mime="text/csv", key='download_csv_persist', help="Download data with predictions.")
+
+# Handle other placeholder states
+elif run_prediction and run_button_disabled:
+     results_placeholder.warning("Cannot run prediction. Upload/validate data.", icon="⚠️")
+elif not run_prediction and st.session_state.get('ready_for_pipeline'):
+     results_placeholder.info("Click 'Run Prediction' to generate results.", icon="⏳")
+
+st.divider()
+st.caption("Credit Risk Prediction Application - Pipeline Handles Imputation")

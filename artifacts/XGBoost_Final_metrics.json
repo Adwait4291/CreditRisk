@@ -1,9 +1,9 @@
 {
     "model_name": "XGBoost_Final",
-    "accuracy": 0.757504873294347,
+    "accuracy": 0.7559454191033138,
     "class_metrics": {
         "P1": {
-            "precision": 0.7565543071161048,
-            "recall": 0.6171079429735234,
-            "f1_score": 0.6797532249018509,
+            "precision": 0.7506172839506173,
+            "recall": 0.6191446028513238,
+            "f1_score": 0.6785714285714286,
             "support": 
