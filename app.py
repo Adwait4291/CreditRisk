@@ -11,8 +11,8 @@ import streamlit as st
 from utils import predict
 
 # --- Page Configuration ---
-# Set the page configuration and title. This should be the first Streamlit command.
-st.set_page_config(page_title="Credit Risk Modeling", page_icon="📊", layout="centered")
+# Set the page layout to "wide" to use the full screen width.
+st.set_page_config(page_title="Credit Risk Modeling", page_icon="📊", layout="wide")
 
 # --- Page Title ---
 st.title("📊 Credit Risk Modelling")
@@ -112,4 +112,3 @@ if st.button("Calculate Risk", type="primary"):
 
     except Exception as e:
         st.error(f"An error occurred during prediction: {e}")
-
