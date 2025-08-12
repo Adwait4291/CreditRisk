@@ -102,35 +102,6 @@ The SHAP summary plot reveals the top predictors driving credit risk predictions
 - Account age and credit mix
 - Recent credit inquiries
 
-## 🎯 Usage Examples
-
-### Basic Prediction
-```python
-import joblib
-import pandas as pd
-
-# Load the trained model
-model = joblib.load('models/best_xgboost_model.pkl')
-
-# Sample borrower data
-borrower_data = {
-    'income': 50000,
-    'debt_to_income': 0.3,
-    'credit_score': 720,
-    'loan_amount': 25000
-}
-
-# Make prediction
-risk_probability = model.predict_proba([list(borrower_data.values())])[0][1]
-print(f"Default Risk Probability: {risk_probability:.2%}")
-```
-
-### Streamlit Interface
-Run the web application for interactive predictions:
-```bash
-streamlit run app.py
-```
-
 ## 🚀 Deployment
 
 ### Local Deployment
@@ -160,7 +131,3 @@ Deploy easily on:
 
 ---
 
-### ⭐ Star this repository if it helped you!
-
-![GitHub stars](https://img.shields.io/github/stars/yourusername/credit-risk-modeling?style=social)
-![GitHub forks](https://img.shields.io/github/forks/yourusername/credit-risk-modeling?style=social)
