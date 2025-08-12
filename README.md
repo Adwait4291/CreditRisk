@@ -2,6 +2,8 @@
 
 A comprehensive credit risk assessment system powered by machine learning that evaluates borrowers' default risk, calculates credit scores, and assigns credit ratings. Built with Python and Streamlit for an interactive, user-friendly experience.
 
+DEMO LINK : https://creditriskgit-snwtstjfpoacbfzmtwmqip.streamlit.app/
+
 ## 📌 Project Overview
 
 Credit risk modeling is essential for financial institutions to estimate the likelihood of borrower defaults. This project provides:
