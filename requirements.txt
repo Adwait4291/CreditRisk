@@ -1,26 +1,10 @@
-# Core Data Handling and Numerical Operations
-pandas
-numpy
-
-# Machine Learning & Preprocessing
-scikit-learn
-xgboost
-
-# Statistical Tests (VIF, ANOVA, Chi2)
-statsmodels
-scipy
-
-# Plotting & Visualization
-matplotlib
-seaborn
-
-# Artifact Saving/Loading
-joblib
-
-# Web Application Framework
-streamlit
-
-# Note: Specific versions are not pinned here. 
-# After installing these in your virtual environment, 
-# you can run 'pip freeze > requirements.txt' 
-# to lock down the exact versions you used.
+joblib==1.4.2
+mysql-connector==2.2.9
+mysql-connector-python==9.0.0
+numpy==2.2.0
+scikit-learn==1.5.2
+scipy==1.14.1
+setuptools==75.1.0
+threadpoolctl==3.5.0
+wheel==0.44.0
+xgboost==2.1.3
