@@ -1,86 +1,115 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Dec 10 13:29:38 2024
+Streamlit web application for Credit Risk Modelling.
+This application provides a user interface to input customer and loan details
+and get a real-time risk assessment.
 
 @author: Admin
 """
 
-# import os
-# print(os.getcwd())
-
-# os.chdir(r'D:\Data Science and Data Analytics\ML\Assignment - Credit Risk Modelling\Credit Risk Modelling\Project Files')
-
 import streamlit as st
 from utils import predict
 
-
-# Set the page configuration and title
+# --- Page Configuration ---
+# Set the page configuration and title. This should be the first Streamlit command.
 st.set_page_config(page_title="Credit Risk Modeling", page_icon="📊", layout="centered")
+
+# --- Page Title ---
 st.title("📊 Credit Risk Modelling")
 
-# Sidebar for User Instructions
+# --- Sidebar for User Instructions ---
 with st.sidebar:
     st.header("Instructions")
     st.write("""
-    1. Fill in the necessary fields on the right side.
+    1. Fill in the necessary fields in the main panel.
     2. Adjust sliders and dropdowns for interactive inputs.
-    3. Click 'Calculate Risk' to view results.
+    3. Click 'Calculate Risk' to view the assessment results.
     """)
-    st.image("project-root/Lauki Finance.JPG", caption="Your Trusted Finance Partner")  # Add a relevant image/logo.
+    st.info("This is a demo application. The predictions are for illustrative purposes only.")
 
-# Input Fields
+# --- Input Fields ---
+# Group related inputs using subheaders for a clean layout.
+
 st.subheader("💼 Customer Details")
-
-# Row 1: Age, Income, Loan Amount
+# Use columns to organize input fields horizontally.
 col1, col2, col3 = st.columns(3)
 
-age = col1.number_input("Age", min_value=18, max_value=100, value=28, help="Enter your age (18-100).")
-income = col2.number_input("Income (Annual)", min_value=0, max_value=5000000, value=290875, step=50000, help="Your annual income in currency units.")
-loan_amount = col3.number_input("Loan Amount", min_value=0, value=2560000, help="Total loan amount you want to borrow.")
+with col1:
+    age = st.number_input("Age", min_value=18, max_value=100, value=28, help="Enter the customer's age (18-100).")
+with col2:
+    income = st.number_input("Annual Income", min_value=0, max_value=5000000, value=290000, step=10000, help="Enter the customer's annual income.")
+with col3:
+    loan_amount = st.number_input("Loan Amount", min_value=0, value=250000, step=10000, help="Enter the total loan amount requested.")
 
-# Row 2: Loan Insights
+# --- Loan Insights ---
 st.subheader("📊 Loan Insights")
+# Calculate Loan-to-Income ratio and display it using st.metric for emphasis.
 lti = loan_amount / income if income > 0 else 0
-st.metric(label="Loan-to-Income Ratio (LTI)", value=f"{lti:.2f}", help="This shows the ratio of the loan amount to your income.")
+st.metric(label="Loan-to-Income Ratio (LTI)", value=f"{lti:.2f}", help="This shows the ratio of the loan amount to annual income.")
 
-# Row 3: Loan Tenure, Avg DPD, DMTLM
-st.subheader("📑 Loan Details")
+# --- Loan and Credit History Details ---
+st.subheader("📑 Loan & Credit Details")
 col4, col5, col6 = st.columns(3)
 
-loan_tenure_months = col4.slider("Loan Tenure (Months)", min_value=6, max_value=240, step=6, value=36, help="Select the loan tenure in months.")
-avg_dpd_per_dm = col5.number_input("Avg DPD", min_value=0, value=0, help="Average Delinquent Days (Defaults), set to 0 if no loan history.")
-dmtlm = col6.slider("DMTLM (Delinquent Months to Loan Month Ratio)", min_value=0, max_value=100, value=0, help="Delinquency ratio, 0 if no loans.")
+with col4:
+    loan_tenure_months = st.slider("Loan Tenure (Months)", min_value=6, max_value=240, step=6, value=36, help="Select the desired loan tenure in months.")
+with col5:
+    avg_dpd_per_dm = st.number_input("Avg DPD", min_value=0, value=0, help="Average Days Past Due (Defaults). Set to 0 if no prior loan history.")
+with col6:
+    total_loan_months = st.number_input("Total Loan Months", min_value=0, value=0, help="Cumulative tenure across all past loans. Set to 0 if no prior loans.")
 
-# Row 4: Credit Utilization, Total Loan Months, Loan Purpose
-st.subheader("🏡 Loan Purpose")
-col7, col8, col9 = st.columns(3)
+col7, col8 = st.columns(2)
+with col7:
+    credit_utilization_ratio = st.slider("Credit Utilization (%)", min_value=0, max_value=100, value=0, help="Percentage of utilized credit. Set to 0 if no credit history.")
+with col8:
+    dmtlm = st.slider("DMTLM Ratio", min_value=0, max_value=100, value=0, help="Delinquent Months to Total Loan Months Ratio (%). Set to 0 if no delinquencies.")
 
-credit_utilization_ratio = col7.slider("Credit Utilization (%)", min_value=0, max_value=100, value=0, help="Percentage of utilized credit, 0 if no credit.")
-total_loan_months = col8.number_input("Total Loan Months", min_value=0, value=0, help="Cumulative loan tenure across all loans, 0 if no loans.")
-loan_purpose = col9.selectbox("Loan Purpose", ['Education', 'Home', 'Auto', 'Personal'], help="Purpose of the loan.")
 
-# Row 5: Loan Type, Residence Type
-st.subheader("🏠 Loan and Residence Type")
-col10, col11 = st.columns(2)
+# --- Categorical Loan and Residence Details ---
+st.subheader("🏠 Loan Purpose & Residence")
+col9, col10, col11 = st.columns(3)
 
-loan_type = col10.radio("Loan Type", ['Unsecured', 'Secured'], help="Choose the type of loan.")
-residence_type = col11.selectbox("Residence Type", ['Owned', 'Rented', 'Mortgage'], help="Your current residence type.")
+with col9:
+    loan_purpose = st.selectbox("Loan Purpose", ['Personal', 'Home', 'Auto', 'Education'], help="Select the primary purpose of the loan.")
+with col10:
+    loan_type = st.radio("Loan Type", ['Unsecured', 'Secured'], help="Choose the type of loan.")
+with col11:
+    residence_type = st.selectbox("Residence Type", ['Rented', 'Owned', 'Mortgage'], help="Select the customer's current residence type.")
 
-# Action Button
-if st.button("Calculate Risk"):
-    # Call the `predict` function with input fields
-    probability, credit_score, rating = predict(age, avg_dpd_per_dm, credit_utilization_ratio, dmtlm, income,
-                                                loan_amount, loan_tenure_months, total_loan_months,
-                                                loan_purpose, loan_type, residence_type)
 
-    # Display Results
-    st.success("✅ Risk Assessment Completed!")
-    st.write(f"**Default Probability:** {probability:.2%}")
-    st.write(f"**Credit Score:** {credit_score}")
-    st.write(f"**Rating:** {rating}")
+# --- Action Button and Prediction Logic ---
+# Use a button to trigger the prediction process.
+if st.button("Calculate Risk", type="primary"):
+    try:
+        # Call the `predict` function from utils.py with all the input fields
+        probability, credit_score, rating = predict(
+            age=age, 
+            avg_dpd_per_dm=avg_dpd_per_dm, 
+            credit_utilization_ratio=credit_utilization_ratio, 
+            dmtlm=dmtlm, 
+            income=income,
+            loan_amount=loan_amount, 
+            loan_tenure_months=loan_tenure_months, 
+            total_loan_months=total_loan_months,
+            loan_purpose=loan_purpose, 
+            loan_type=loan_type, 
+            residence_type=residence_type
+        )
 
-    # Risk Insights
-    if rating in ['Poor', 'Average']:
-        st.warning("⚠ The borrower have a high-risk credit profile. Consider improving credit habits.")
-    else:
-        st.info("🌟 The borrower have a low-risk profile. Loan approval is likely.")
+        # --- Display Results ---
+        st.success("✅ Risk Assessment Completed!")
+        
+        res_col1, res_col2, res_col3 = st.columns(3)
+        res_col1.metric("Default Probability", f"{probability:.2%}")
+        res_col2.metric("Credit Score", f"{credit_score}")
+        res_col3.metric("Credit Rating", rating)
+
+        # Provide contextual insights based on the prediction rating
+        if rating in ['Poor', 'Average']:
+            st.warning("High-Risk Profile: This applicant may have a higher likelihood of default. Cautious consideration is advised.")
+        else:
+            st.info("Low-Risk Profile: This applicant demonstrates strong creditworthiness. Loan approval is likely.")
+
+    except Exception as e:
+        st.error(f"An error occurred during prediction: {e}")
+
